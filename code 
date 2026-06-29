@@ -1,0 +1,253 @@
+#include <WiFi.h>
+#include <ESPAsyncWebServer.h>
+
+const char* ssid = "Soccer Robot";
+const char* password = "12345678";
+
+const int motorLeftPWM = 26;   
+const int motorLeftDir1 = 13;  
+const int motorLeftDir2 = 12;  
+
+const int motorRightPWM = 25;  
+const int motorRightDir1 = 14; 
+const int motorRightDir2 = 27; 
+
+int currentSpeed = 0;      
+String currentSteering = ""; 
+
+AsyncWebServer server(80);
+
+const char index_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; touch-action: none; }
+        body {
+            font-family: 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #05060b 0%, #11071c 50%, #030d12 100%);
+            background-image: radial-gradient(rgba(0, 242, 254, 0.05) 1px, transparent 0);
+            background-size: 24px 24px; color: #fff; height: 100vh; width: 100vw;
+            display: flex; flex-direction: column; justify-content: space-between; align-items: center; padding: 12px 25px; overflow: hidden;
+        }
+        .top-bar {
+            width: 100%; display: flex; justify-content: space-between; align-items: center;
+            background: rgba(13, 16, 27, 0.4); padding: 10px 25px; border-radius: 20px;
+            backdrop-filter: blur(20px); border: 1px solid rgba(0, 242, 254, 0.25);
+            box-shadow: 0 0 25px rgba(0, 242, 254, 0.15);
+        }
+        .status-item { display: flex; align-items: center; gap: 8px; height: 16px; }
+        .controller-layout { display: flex; flex-direction: row; align-items: center; justify-content: space-around; width: 100%; flex-grow: 1; padding: 10px 0; }
+        .pad-wrapper-left { position: relative; height: 280px; width: 82px; display: flex; justify-content: center; }
+        .label-f { position: absolute; top: -40px; font-size: 32px; font-weight: 900; color: #00ffaa; text-shadow: 0 0 15px #00ffaa; }
+        .label-b { position: absolute; bottom: -40px; font-size: 32px; font-weight: 900; color: #ff1f5a; text-shadow: 0 0 15px #ff1f5a; }
+        .slider-vertical-bg {
+            width: 100%; height: 100%; background: rgba(5, 7, 15, 0.85); border: 2px solid rgba(0, 242, 254, 0.15);
+            border-radius: 25px; position: relative; box-shadow: inset 0 0 20px #000;
+            display: flex; justify-content: center; align-items: center; overflow: hidden;
+        }
+        .slider-fill-v { position: absolute; width: 100%; background: linear-gradient(to top, rgba(255, 31, 90, 0.2), rgba(0, 255, 170, 0.2)); bottom: 50%; height: 0%; pointer-events: none; }
+        .knob-vertical {
+            width: 66px; height: 66px; background: linear-gradient(135deg, #2af598 0%, #009efd 100%); border-radius: 20px;
+            position: absolute; cursor: pointer; box-shadow: 0 0 25px rgba(42, 245, 152, 0.6); border: 2px solid #fff; z-index: 5;
+        }
+        .wheel-container { position: relative; width: 190px; height: 190px; display: flex; justify-content: center; align-items: center; }
+        .wheel-outer-ring { position: absolute; width: 100%; height: 100%; border-radius: 50%; border: 2px dashed rgba(0, 242, 254, 0.4); animation: rotate-cw 20s linear infinite; }
+        .speed-wheel {
+            position: absolute; width: 88%; height: 88%; border-radius: 50%; background: radial-gradient(circle, #05060b 40%, #101424 75%, #010204 100%);
+            border: 4px solid rgba(0, 242, 254, 0.2); box-shadow: 0 0 45px #000; overflow: hidden; display: flex; justify-content: center; align-items: center;
+        }
+        .wheel-spokes { position: absolute; width: 100%; height: 100%; opacity: 0.15; background: linear-gradient(90deg, transparent 48%, #00f2fe 50%, transparent 52%), linear-gradient(0deg, transparent 48%, #00f2fe 50%, transparent 52%); }
+        .wheel-container.forward .speed-wheel { border-color: #00ffaa; box-shadow: 0 0 40px rgba(0, 255, 170, 0.4); }
+        .wheel-container.backward .speed-wheel { border-color: #ff1f5a; box-shadow: 0 0 40px rgba(255, 31, 90, 0.4); }
+        @keyframes rotate-cw { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes rotate-ccw { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
+        .wheel-content { position: relative; z-index: 2; display: flex; flex-direction: column; justify-content: center; align-items: center; pointer-events: none; }
+        .velocity-display { font-size: 56px; font-weight: 900; color: #fff; text-shadow: 0 0 15px rgba(255,255,255,0.4); font-family: monospace, sans-serif; }
+        .val-positive { color: #00ffaa; filter: drop-shadow(0 0 15px #00ffaa); }
+        .val-negative { color: #ff1f5a; filter: drop-shadow(0 0 15px #ff1f5a); }
+        .steering-display { font-size: 14px; color: #00f2fe; margin-top: 2px; font-weight: 800; text-shadow: 0 0 10px rgba(0,242,254,0.6); min-height: 18px;}
+        .pad-wrapper-right { position: relative; width: 240px; height: 82px; display: flex; align-items: center; }
+        .label-l { position: absolute; left: -42px; font-size: 32px; font-weight: 900; color: #00f2fe; text-shadow: 0 0 15px #00f2fe; }
+        .label-r { position: absolute; right: -42px; font-size: 32px; font-weight: 900; color: #00f2fe; text-shadow: 0 0 15px #00f2fe; }
+        .slider-horizontal-bg {
+            width: 100%; height: 100%; background: rgba(5, 7, 15, 0.85); border: 2px solid rgba(0, 242, 254, 0.15);
+            border-radius: 25px; position: relative; box-shadow: inset 0 0 20px #000;
+            display: flex; align-items: center; justify-content: center; overflow: hidden;
+        }
+        .slider-fill-h { position: absolute; height: 100%; background: rgba(0, 242, 254, 0.15); left: 50%; width: 0%; pointer-events: none; }
+        .knob-horizontal {
+            width: 66px; height: 66px; background: linear-gradient(135deg, #ff007f 0%, #ff2a5f 100%); border-radius: 20px;
+            position: absolute; cursor: pointer; box-shadow: 0 0 25px rgba(255, 0, 127, 0.6); border: 2px solid #fff; z-index: 5;
+        }
+        .knob-vertical:active, .knob-horizontal:active { width: 70px; height: 70px; filter: brightness(1.2); }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <div class="status-item" style="color:#00ffaa;">ONLINE</div>
+        <div class="status-item" style="color:#00f2fe;">RSSI: MAX</div>
+    </div>
+
+    <div class="controller-layout">
+        <div class="pad-wrapper-left">
+            <div class="label-f">F</div>
+            <div class="slider-vertical-bg" id="slider-v-bg">
+                <div class="slider-fill-v" id="fill-v"></div>
+                <div class="knob-vertical" id="knob-f-b"></div>
+            </div>
+            <div class="label-b">B</div>
+        </div>
+
+        <div class="wheel-container" id="wheel-container">
+            <div class="wheel-outer-ring"></div>
+            <div class="speed-wheel" id="animated-wheel"><div class="wheel-spokes"></div></div>
+            <div class="wheel-content">
+                <div class="velocity-display" id="velocity">0</div>
+                <div class="steering-display" id="steering"></div>
+            </div>
+        </div>
+
+        <div class="pad-wrapper-right">
+            <div class="label-l">L</div>
+            <div class="slider-horizontal-bg" id="slider-h-bg">
+                <div class="slider-fill-h" id="fill-h"></div>
+                <div class="knob-horizontal" id="knob-l-r"></div>
+            </div>
+            <div class="label-r">R</div>
+        </div>
+    </div>
+
+    <script>
+        const knobFB = document.getElementById('knob-f-b'), bgFB = document.getElementById('slider-v-bg'), fillV = document.getElementById('fill-v');
+        const knobLR = document.getElementById('knob-l-r'), bgLR = document.getElementById('slider-h-bg'), fillH = document.getElementById('fill-h');
+        const velocityDisplay = document.getElementById('velocity'), steeringDisplay = document.getElementById('steering');
+        const wheelContainer = document.getElementById('wheel-container'), animatedWheel = document.getElementById('animated-wheel');
+
+        let velocity = 0, steering = "", lastVelocity = 0, lastSteering = "";
+        const maxVerticalRange = 120, maxHorizontalRange = 75;
+        let touchIdFB = null, touchIdLR = null, updatePending = false;
+
+        function updateUI() {
+            velocityDisplay.innerText = Math.abs(velocity);
+            if (velocity > 0) {
+                velocityDisplay.className = "velocity-display val-positive"; wheelContainer.className = "wheel-container forward";
+                animatedWheel.style.animation = `rotate-cw ${(105 - velocity) * 0.01}s linear infinite`;
+            } else if (velocity < 0) {
+                velocityDisplay.className = "velocity-display val-negative"; wheelContainer.className = "wheel-container backward";
+                animatedWheel.style.animation = `rotate-ccw ${(105 - Math.abs(velocity)) * 0.01}s linear infinite`;
+            } else {
+                velocityDisplay.className = "velocity-display"; velocityDisplay.style.color = "#fff";
+                wheelContainer.className = "wheel-container"; animatedWheel.style.animation = "none";
+            }
+            steeringDisplay.innerText = steering;
+        }
+
+        function queueSend() {
+            if (!updatePending) {
+                updatePending = true;
+                requestAnimationFrame(() => {
+                    if (velocity !== lastVelocity || steering !== lastSteering) {
+                        fetch(`/drive?speed=${velocity}&steer=${steering}`).catch(()=>{});
+                        lastVelocity = velocity; lastSteering = steering;
+                    }
+                    updatePending = false;
+                });
+            }
+        }
+
+        bgFB.addEventListener('touchstart', (e) => { e.preventDefault(); touchIdFB = e.changedTouches[0].identifier; handleFB(e.changedTouches[0].clientY); });
+        window.addEventListener('touchmove', (e) => { if (touchIdFB === null) return; for (let t of e.touches) { if (t.identifier === touchIdFB) { handleFB(t.clientY); break; } } });
+        window.addEventListener('touchend', (e) => {
+            for (let t of e.changedTouches) { if (t.identifier === touchIdFB) { touchIdFB = null; knobFB.style.transform = "translateY(0px)"; fillV.style.height = "0%"; velocity = 0; updateUI(); queueSend(); break; } }
+        });
+
+        function handleFB(clientY) {
+            const rect = bgFB.getBoundingClientRect(); let deltaY = clientY - (rect.top + rect.height / 2);
+            deltaY = Math.max(-maxVerticalRange, Math.min(maxVerticalRange, deltaY));
+            knobFB.style.transform = `translateY(${deltaY}px)`;
+            if (deltaY < 0) { fillV.style.bottom = "50%"; fillV.style.height = `${(Math.abs(deltaY) / maxVerticalRange) * 50}%`; } 
+            else { fillV.style.bottom = `${50 - (deltaY / maxVerticalRange) * 50}%`; fillV.style.height = `${(deltaY / maxVerticalRange) * 50}%`; }
+            velocity = Math.round((-deltaY / maxVerticalRange) * 100); updateUI(); queueSend();
+        }
+
+        bgLR.addEventListener('touchstart', (e) => { e.preventDefault(); touchIdLR = e.changedTouches[0].identifier; handleLR(e.changedTouches[0].clientX); });
+        window.addEventListener('touchmove', (e) => { if (touchIdLR === null) return; for (let t of e.touches) { if (t.identifier === touchIdLR) { handleLR(t.clientX); break; } } });
+        window.addEventListener('touchend', (e) => {
+            for (let t of e.changedTouches) { if (t.identifier === touchIdLR) { touchIdLR = null; knobLR.style.transform = "translateX(0px)"; fillH.style.width = "0%"; steering = ""; updateUI(); queueSend(); break; } }
+        });
+
+        function handleLR(clientX) {
+            const rect = bgLR.getBoundingClientRect(); let deltaX = clientX - (rect.left + rect.width / 2);
+            deltaX = Math.max(-maxHorizontalRange, Math.min(maxHorizontalRange, deltaX));
+            knobLR.style.transform = `translateX(${deltaX}px)`;
+            if (deltaX > 0) { fillH.style.left = "50%"; fillH.style.width = `${(deltaX / maxHorizontalRange) * 50}%`; } 
+            else { fillH.style.left = `${50 - (Math.abs(deltaX) / maxHorizontalRange) * 50}%`; fillH.style.width = `${(Math.abs(deltaX) / maxHorizontalRange) * 50}%`; }
+            steering = deltaX > 25 ? "R" : (deltaX < -25 ? "L" : ""); updateUI(); queueSend();
+        }
+    </script>
+</body>
+</html>
+)rawliteral";
+
+void moveRobot(int speed, String steer) {
+  int pwmValue = map(abs(speed), 0, 100, 0, 110); 
+  int leftPWM = pwmValue;
+  int rightPWM = pwmValue;
+
+  if (steer == "L") {
+    leftPWM = (speed >= 0) ? (pwmValue * 0.20) : pwmValue;
+    if (speed < 0) rightPWM = pwmValue * 0.20;
+  } 
+  else if (steer == "R") {
+    rightPWM = (speed >= 0) ? (pwmValue * 0.20) : pwmValue;
+    if (speed < 0) leftPWM = pwmValue * 0.20;
+  }
+
+  if (speed > 0) { 
+    digitalWrite(motorLeftDir1, HIGH);   digitalWrite(motorLeftDir2, LOW);
+    digitalWrite(motorRightDir1, HIGH);  digitalWrite(motorRightDir2, LOW);
+  } 
+  else if (speed < 0) { 
+    digitalWrite(motorLeftDir1, LOW);    digitalWrite(motorLeftDir2, HIGH);
+    digitalWrite(motorRightDir1, LOW);   digitalWrite(motorRightDir2, HIGH);
+  } 
+  else { 
+    digitalWrite(motorLeftDir1, LOW);    digitalWrite(motorLeftDir2, LOW);
+    digitalWrite(motorRightDir1, LOW);   digitalWrite(motorRightDir2, LOW);
+    leftPWM = 0; 
+    rightPWM = 0;
+  }
+
+  analogWrite(motorLeftPWM, leftPWM);
+  analogWrite(motorRightPWM, rightPWM);
+}
+
+void setup() {
+  pinMode(motorLeftPWM, OUTPUT);   pinMode(motorLeftDir1, OUTPUT);   pinMode(motorLeftDir2, OUTPUT);
+  pinMode(motorRightPWM, OUTPUT);  pinMode(motorRightDir1, OUTPUT);  pinMode(motorRightDir2, OUTPUT);
+
+  WiFi.setTxPower(WIFI_POWER_19_5dBm); 
+  WiFi.softAP(ssid, password);
+
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send_P(200, "text/html", index_html);
+  });
+
+  server.on("/drive", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(200, "text/plain", "1"); 
+
+    if (request->hasParam("speed") && request->hasParam("steer")) {
+      currentSpeed = request->getParam("speed")->value().toInt();
+      currentSteering = request->getParam("steer")->value();
+      moveRobot(currentSpeed, currentSteering); 
+    }
+  });
+
+  server.begin();
+}
+
+void loop() {
+}
